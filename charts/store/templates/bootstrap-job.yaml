@@ -1,0 +1,158 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: store-bootstrap
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app: store-bootstrap
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app: store-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ .Values.wordpress.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: STORE_HOST
+              value: {{ .Values.ingress.host | quote }}
+            - name: WORDPRESS_DB_HOST
+              value: "mysql:3306"
+            - name: WORDPRESS_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: MYSQL_DATABASE
+            - name: WORDPRESS_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: MYSQL_USER
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-credentials
+                  key: MYSQL_PASSWORD
+            - name: WP_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: wp-admin
+                  key: WP_ADMIN_USER
+            - name: WP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wp-admin
+                  key: WP_ADMIN_PASSWORD
+            - name: WP_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: wp-admin
+                  key: WP_ADMIN_EMAIL
+            - name: WOO_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: woo-rest-keys
+                  key: WOO_CONSUMER_KEY
+            - name: WOO_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: woo-rest-keys
+                  key: WOO_CONSUMER_SECRET
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Waiting for MySQL at mysql:3306..."
+              until mysqladmin ping -h mysql -u "${WORDPRESS_DB_USER}" -p"${WORDPRESS_DB_PASSWORD}" --silent; do
+                sleep 2
+              done
+              echo "MySQL is reachable."
+
+              if [ ! -f /var/www/html/wp-includes/version.php ]; then
+                echo "Populating WordPress root from /usr/src/wordpress..."
+                cp -r /usr/src/wordpress/* /var/www/html/
+                wp config create \
+                  --path=/var/www/html \
+                  --dbname="${WORDPRESS_DB_NAME}" \
+                  --dbuser="${WORDPRESS_DB_USER}" \
+                  --dbpass="${WORDPRESS_DB_PASSWORD}" \
+                  --dbhost="${WORDPRESS_DB_HOST}" \
+                  --allow-root \
+                  --extra-php="if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; } define('DISABLE_WP_CRON', true);"
+              fi
+
+              echo "Checking WordPress installation..."
+              if ! wp core is-installed --path=/var/www/html --allow-root 2>/dev/null; then
+                echo "Installing WordPress core..."
+                wp core install \
+                  --path=/var/www/html \
+                  --url="http://${STORE_HOST}" \
+                  --title="Urumi Store" \
+                  --admin_user="${WP_ADMIN_USER}" \
+                  --admin_password="${WP_ADMIN_PASSWORD}" \
+                  --admin_email="${WP_ADMIN_EMAIL}" \
+                  --skip-email \
+                  --allow-root
+              else
+                echo "WordPress core is already installed."
+              fi
+
+              echo "Activating WooCommerce plugin..."
+              wp plugin activate woocommerce --path=/var/www/html --allow-root || true
+
+              echo "Configuring pretty permalinks..."
+              wp rewrite structure '/%postname%/' --path=/var/www/html --allow-root
+
+              echo "Configuring store currency and COD payment..."
+              wp option update woocommerce_currency "USD" --path=/var/www/html --allow-root
+              wp option update woocommerce_default_country "US:CA" --path=/var/www/html --allow-root
+
+              wp eval '
+              update_option("woocommerce_cod_settings", array(
+                  "enabled" => "yes",
+                  "title" => "Cash on delivery",
+                  "description" => "Pay with cash upon delivery."
+              ));
+              ' --path=/var/www/html --allow-root
+
+              echo "Idempotently provisioning WooCommerce REST API keys..."
+              wp eval '
+              global $wpdb;
+              $key = getenv("WOO_CONSUMER_KEY");
+              $secret = getenv("WOO_CONSUMER_SECRET");
+              $hash = hash_hmac("sha256", $key, "wc-api");
+              $exists = $wpdb->get_var($wpdb->prepare("SELECT key_id FROM {$wpdb->prefix}woocommerce_api_keys WHERE consumer_key = %s", $hash));
+              if (!$exists) {
+                  $wpdb->insert(
+                      "{$wpdb->prefix}woocommerce_api_keys",
+                      array(
+                          "user_id" => 1,
+                          "description" => "Urumi MCP Gateway",
+                          "permissions" => "read_write",
+                          "consumer_key" => $hash,
+                          "consumer_secret" => $secret,
+                          "truncated_key" => substr($key, -7)
+                      )
+                  );
+                  echo "Created REST API key\n";
+              } else {
+                  echo "REST API key already exists\n";
+              }
+              ' --path=/var/www/html --allow-root
+
+              echo "Store bootstrap finished successfully!"
+          volumeMounts:
+            - name: wp-uploads
+              mountPath: /var/www/html/wp-content/uploads
+      volumes:
+        - name: wp-uploads
+          persistentVolumeClaim:
+            claimName: wp-uploads

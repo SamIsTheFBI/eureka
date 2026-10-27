@@ -1,0 +1,13 @@
+ingress:
+  host: app.example.com
+  tls: true
+
+gateway:
+  replicas: 2
+
+dashboard:
+  replicas: 2
+
+postgres:
+  storage: 10Gi
+  storageClassName: local-path

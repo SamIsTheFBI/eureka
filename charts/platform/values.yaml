@@ -1,0 +1,67 @@
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  host: app.localtest.me
+  tls: false
+
+postgres:
+  image: postgres:16-alpine
+  storage: 2Gi
+  storageClassName: local-path
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+gateway:
+  image: urumi/gateway:latest
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  llm:
+    provider: "mock" # "mock", "ollama", "opencode", "openai"
+    baseURL: "https://opencode.ai/zen/go/v1"
+    model: "deepseek-v4-flash"
+    apiKey: ""
+
+dashboard:
+  image: urumi/dashboard:latest
+  replicas: 1
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+utilsMcp:
+  image: urumi/utils-mcp:latest
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+secrets:
+  postgresUser: "postgres"
+  postgresPassword: "GatewayDBPassword123!"
+  postgresDatabase: "gateway"
+  adminEmail: "admin@localtest.me"
+  adminPassword: "AdminPassword123!"
+  masterKeyHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  sessionKey: "urumi-session-secret-key-32bytes!"
+  wooMcpToken: "woo-mcp-shared-bearer-token-12345"
+  utilsAuthKey: "utils-secret-key-12345"
+  llmApiKey: ""

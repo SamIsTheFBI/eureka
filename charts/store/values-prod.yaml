@@ -1,0 +1,14 @@
+ingress:
+  host: store.example.com
+  tls: true
+
+wooMcp:
+  replicas: 2
+
+mysql:
+  storage: 20Gi
+  storageClassName: local-path
+
+wordpress:
+  storage: 10Gi
+  storageClassName: local-path

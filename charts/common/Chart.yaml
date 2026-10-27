@@ -1,0 +1,6 @@
+apiVersion: v2
+name: common
+description: Shared library chart providing common labels, pod security context, and helper templates
+type: library
+version: 0.1.0
+appVersion: "0.1.0"
